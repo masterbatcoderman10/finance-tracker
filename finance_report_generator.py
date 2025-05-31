@@ -33,14 +33,37 @@ class FinanceReportGenerator:
         """Load and preprocess transaction data"""
         try:
             self.df = pd.read_csv(self.data_file)
-            # Convert date column to datetime
-            self.df['date'] = pd.to_datetime(self.df['date'])
-            # Create month-year column for grouping
+
+            # Check for empty or invalid dates before conversion
+            print(f"Loaded {len(self.df)} transactions from {self.data_file}")
+
+            # Convert date column to datetime, handling errors
+            self.df['date'] = pd.to_datetime(self.df['date'], errors='coerce')
+
+            # Check for NaT values after conversion
+            nat_count = self.df['date'].isna().sum()
+            if nat_count > 0:
+                print(
+                    f"Warning: {nat_count} transactions have invalid dates and will be excluded from monthly analysis")
+                # Show some examples of problematic rows
+                invalid_dates = self.df[self.df['date'].isna()]
+                if not invalid_dates.empty:
+                    print("Examples of rows with invalid dates:")
+                    print(invalid_dates[['date', 'description']
+                                        ].head().to_string(index=False))
+
+            # Create month-year column for grouping (only for valid dates)
             self.df['month_year'] = self.df['date'].dt.to_period('M')
+
             # Fill NaN values with 0 for debits and credits
             self.df['debits'] = self.df['debits'].fillna(0)
             self.df['credits'] = self.df['credits'].fillna(0)
-            print(f"Loaded {len(self.df)} transactions from {self.data_file}")
+
+            # Report final valid transaction count
+            valid_transactions = self.df['date'].notna().sum()
+            print(
+                f"Successfully processed {valid_transactions} transactions with valid dates")
+
         except FileNotFoundError:
             print(f"Error: File {self.data_file} not found")
             raise
@@ -58,7 +81,9 @@ class FinanceReportGenerator:
         Returns:
             DataFrame with spending by category
         """
-        month_data = self.df[self.df['month_year'] == month_year]
+        # Filter by month and exclude rows with invalid dates
+        month_data = self.df[(self.df['month_year'] == month_year) & (
+            self.df['date'].notna())]
 
         if month_data.empty:
             return pd.DataFrame(columns=['Category', 'Amount (AED)', 'Transactions', 'Percentage'])
@@ -103,7 +128,9 @@ class FinanceReportGenerator:
         Returns:
             DataFrame with sorted transaction log
         """
-        month_data = self.df[self.df['month_year'] == month_year]
+        # Filter by month and exclude rows with invalid dates
+        month_data = self.df[(self.df['month_year'] == month_year) & (
+            self.df['date'].notna())]
 
         # Determine column names based on transaction type
         if transaction_type == 'credits':
@@ -148,8 +175,10 @@ class FinanceReportGenerator:
         if self.df is None or self.df.empty:
             return []
 
-        months = self.df['month_year'].unique()
-        return sorted([str(month) for month in months])
+        # Filter out NaT values before getting unique months
+        valid_months = self.df['month_year'].dropna()
+        months = valid_months.unique()
+        return sorted([str(month) for month in months if pd.notna(month)])
 
     def generate_month_report(self, month_year: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
