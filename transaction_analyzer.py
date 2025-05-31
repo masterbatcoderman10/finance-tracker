@@ -133,7 +133,8 @@ For each transaction:
     async def classify_transactions(
         self,
         transactions: List[str],
-        max_concurrent: int = 8
+        max_concurrent: int = 8,
+        return_only: bool = False
     ) -> List[dict]:
         """
         Classify multiple transactions with semaphore-controlled concurrency
@@ -141,6 +142,7 @@ For each transaction:
         Args:
             transactions: List of transaction description strings
             max_concurrent: Maximum number of concurrent API calls
+            return_only: If True, suppress progress output and return data only
 
         Returns:
             List of classification result dictionaries
@@ -148,8 +150,9 @@ For each transaction:
         # Create semaphore to limit concurrent requests
         semaphore = asyncio.Semaphore(max_concurrent)
 
-        print(
-            f"Processing {len(transactions)} transactions with max {max_concurrent} concurrent requests...")
+        if not return_only:
+            print(
+                f"Processing {len(transactions)} transactions with max {max_concurrent} concurrent requests...")
 
         # Create all tasks explicitly using asyncio.create_task
         tasks = [
@@ -159,11 +162,16 @@ For each transaction:
         ]
 
         # Execute all tasks concurrently with progress bar using tqdm.asyncio.tqdm.gather
-        results = await tqdm.asyncio.tqdm.gather(
-            *tasks,
-            desc="Classifying transactions",
-            unit="transaction"
-        )
+        if return_only:
+            # Silent execution without progress bar
+            results = await asyncio.gather(*tasks)
+        else:
+            # With progress bar
+            results = await tqdm.asyncio.tqdm.gather(
+                *tasks,
+                desc="Classifying transactions",
+                unit="transaction"
+            )
 
         return results
 
@@ -328,7 +336,8 @@ For each transaction:
         csv_column: Optional[str] = None,
         output_file: str = "classified_transactions.csv",
         keywords_file: str = "classification_keywords.json",
-        max_concurrent: int = 8
+        max_concurrent: int = 8,
+        return_only: bool = False
     ) -> pd.DataFrame:
         """
         Complete workflow: classify transactions and generate analysis
@@ -341,6 +350,7 @@ For each transaction:
             output_file: Output CSV file for results
             keywords_file: Output JSON file for keywords
             max_concurrent: Maximum concurrent API calls
+            return_only: If True, skip file saving and verbose output
 
         Returns:
             DataFrame with classification results
@@ -358,17 +368,25 @@ For each transaction:
                 transactions = self._get_sample_transactions()
 
         # Classify transactions
-        results = await self.classify_transactions(transactions, max_concurrent)
+        results = await self.classify_transactions(transactions, max_concurrent, return_only)
 
-        # Save to CSV
-        df = self.save_results_to_csv(results, output_file)
+        # Convert to DataFrame
+        df = pd.DataFrame(results)
+        column_order = ["transaction", "category",
+                        "keyword", "confidence", "reasoning"]
+        df = df[column_order]
 
-        # Analyze and print results
-        analysis = self.analyze_results(df)
-        self.print_analysis(analysis)
+        if not return_only:
+            # Save to CSV
+            df.to_csv(output_file, index=False)
+            print(f"Results saved to {output_file}")
 
-        # Export keywords
-        self.export_keywords(df, keywords_file)
+            # Analyze and print results
+            analysis = self.analyze_results(df)
+            self.print_analysis(analysis)
+
+            # Export keywords
+            self.export_keywords(df, keywords_file)
 
         return df
 

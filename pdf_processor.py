@@ -311,9 +311,12 @@ class BankStatementProcessor:
 
         return processed
 
-    def process_all_pages(self) -> List[Dict[str, any]]:
+    def process_all_pages(self, return_only: bool = False) -> List[Dict[str, any]]:
         """
         Process all pages in the PDF and return concatenated results.
+
+        Args:
+            return_only: If True, only return data without saving to files
 
         Returns:
             List of all transactions from all pages
@@ -322,10 +325,12 @@ class BankStatementProcessor:
 
         try:
             with pdfplumber.open(self.pdf_path, password=self.password) as doc:
-                print(f"Processing PDF with {len(doc.pages)} pages...")
+                if not return_only:
+                    print(f"Processing PDF with {len(doc.pages)} pages...")
 
                 for page_num, page in enumerate(doc.pages, 1):
-                    print(f"Processing page {page_num}...")
+                    if not return_only:
+                        print(f"Processing page {page_num}...")
 
                     # Extract table from current page
                     table = self.extract_table_from_page(page)
@@ -334,21 +339,27 @@ class BankStatementProcessor:
                         # Process the table rows with page number info
                         transactions = self.process_table_rows(table, page_num)
                         all_transactions.extend(transactions)
-                        print(
-                            f"  Found {len(transactions)} transactions on page {page_num}")
+                        if not return_only:
+                            print(
+                                f"  Found {len(transactions)} transactions on page {page_num}")
                     else:
-                        print(f"  No transactions found on page {page_num}")
+                        if not return_only:
+                            print(
+                                f"  No transactions found on page {page_num}")
 
         except Exception as e:
-            print(f"Error processing PDF: {e}")
+            if not return_only:
+                print(f"Error processing PDF: {e}")
             raise
 
         # Post-process all transactions to clean amounts and format dates
-        print(f"Post-processing {len(all_transactions)} transactions...")
+        if not return_only:
+            print(f"Post-processing {len(all_transactions)} transactions...")
         processed_transactions = self.post_process_transactions(
             all_transactions)
-        print("  - Cleaned amount columns (removed text, commas)")
-        print("  - Formatted dates to YYYY-MM-DD")
+        if not return_only:
+            print("  - Cleaned amount columns (removed text, commas)")
+            print("  - Formatted dates to YYYY-MM-DD")
 
         return processed_transactions
 
