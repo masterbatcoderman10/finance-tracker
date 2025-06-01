@@ -37,8 +37,17 @@ class FinanceReportGenerator:
             # Check for empty or invalid dates before conversion
             print(f"Loaded {len(self.df)} transactions from {self.data_file}")
 
-            # Convert date column to datetime, handling errors
-            self.df['date'] = pd.to_datetime(self.df['date'], errors='coerce')
+            # Check if cleaned descriptions are available
+            has_cleaned_descriptions = 'cleaned_description' in self.df.columns
+            if has_cleaned_descriptions:
+                print(
+                    "✓ Cleaned descriptions available - will use AI-cleaned descriptions in reports")
+            else:
+                print("• Using original descriptions in reports")
+
+            # Convert date column to datetime, handling errors and specifying DD/MM/YYYY format
+            self.df['date'] = pd.to_datetime(
+                self.df['date'], format='%d/%m/%Y', errors='coerce')
 
             # Check for NaT values after conversion
             nat_count = self.df['date'].isna().sum()
@@ -49,8 +58,14 @@ class FinanceReportGenerator:
                 invalid_dates = self.df[self.df['date'].isna()]
                 if not invalid_dates.empty:
                     print("Examples of rows with invalid dates:")
-                    print(invalid_dates[['date', 'description']
-                                        ].head().to_string(index=False))
+                    # Show both description types if available
+                    if has_cleaned_descriptions:
+                        display_cols = ['date', 'description',
+                                        'cleaned_description']
+                    else:
+                        display_cols = ['date', 'description']
+                    print(invalid_dates[display_cols].head(
+                    ).to_string(index=False))
 
             # Create month-year column for grouping (only for valid dates)
             self.df['month_year'] = self.df['date'].dt.to_period('M')
@@ -132,6 +147,9 @@ class FinanceReportGenerator:
         month_data = self.df[(self.df['month_year'] == month_year) & (
             self.df['date'].notna())]
 
+        # Determine which description column to use
+        description_column = 'cleaned_description' if 'cleaned_description' in self.df.columns else 'description'
+
         # Determine column names based on transaction type
         if transaction_type == 'credits':
             amount_column = 'credits'
@@ -150,7 +168,7 @@ class FinanceReportGenerator:
 
         # Select only required columns
         sorted_df = sorted_df[[
-            'date', 'description', 'category', amount_column]]
+            'date', description_column, 'category', amount_column]]
 
         # Drop rows where amount is NaN or 0
         sorted_df = sorted_df.dropna(subset=[amount_column])

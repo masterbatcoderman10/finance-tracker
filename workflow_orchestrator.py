@@ -6,6 +6,7 @@ Consolidates PDF processing and transaction classification with intelligent cach
 
 from transaction_analyzer import AsyncTransactionClassifier
 from pdf_processor import BankStatementProcessor
+from finance_report_generator import FinanceReportGenerator
 import argparse
 import asyncio
 import json
@@ -14,6 +15,7 @@ import pandas as pd
 from typing import List, Dict, Optional, Set
 from datetime import datetime
 from dotenv import load_dotenv
+from openai import AsyncOpenAI
 
 # Load environment variables from .env file
 load_dotenv()
@@ -33,6 +35,7 @@ class BankStatementWorkflow:
             model: OpenAI model to use for classification
         """
         self.classifier = AsyncTransactionClassifier(api_key, model)
+        self.openai_client = AsyncOpenAI(api_key=api_key)
         self.keyword_cache = {}
 
     def load_keyword_cache(self, cache_file: str) -> Dict[str, str]:
@@ -149,6 +152,92 @@ class BankStatementWorkflow:
 
         return categorized_transactions
 
+    async def clean_description(self, description: str, semaphore: asyncio.Semaphore) -> str:
+        """
+        Clean a single transaction description using AI
+
+        Args:
+            description: Original transaction description
+            semaphore: Asyncio semaphore for rate limiting
+
+        Returns:
+            Cleaned human-readable description
+        """
+        async with semaphore:
+            try:
+                system_prompt = """You are a financial transaction description cleaner. Your task is to convert messy bank transaction descriptions into clean, human-readable descriptions.
+
+Rules:
+1. Remove technical codes, reference numbers, and card numbers
+2. Extract the essential merchant/business name and transaction type
+3. Keep the location if meaningful (city/country)
+4. Make it concise but informative
+5. Use proper capitalization
+6. Remove redundant information
+
+Examples:
+- "POS-PURCHASE CARD NO. 4005-3XXX-XXXX-3917 ABRAJ AL TAAWUN HYPERMARK SHJ:AE 105.03,AED 275348 23-04-2025" → "Abraj Al Taawun Hypermarket, Sharjah"
+- "DR ATM TRANSACTION CARD NO. 400536XXXXXX3917 511613056773 26-04-2025 13:04:02" → "ATM Withdrawal"
+- "POS-PURCHASE CARD NO. 4005-3XXX-XXXX-3917 GOOGLE*YOUTUBEPREMIUM G.CO/HELPPAY#:US" → "YouTube Premium Subscription"
+- "SDM DEPOSIT CR SDM REF.-E4011-6XXX-XXXX-8678;AB J AL TAAWUN" → "Bank Deposit"
+
+Return only the cleaned description, nothing else."""
+
+                response = await self.openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Clean this transaction description: {description}"}
+                    ],
+                    max_tokens=100,
+                    temperature=0.1
+                )
+
+                cleaned = response.choices[0].message.content.strip()
+                return cleaned if cleaned else description
+
+            except Exception as e:
+                print(
+                    f"Error cleaning description '{description[:50]}...': {e}")
+                return description
+
+    async def clean_descriptions_batch(
+        self,
+        descriptions: List[str],
+        max_concurrent: int = 10
+    ) -> List[str]:
+        """
+        Clean multiple transaction descriptions concurrently
+
+        Args:
+            descriptions: List of transaction descriptions to clean
+            max_concurrent: Maximum number of concurrent API calls
+
+        Returns:
+            List of cleaned descriptions
+        """
+        # Create semaphore to limit concurrent requests
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        print(
+            f"   Cleaning {len(descriptions)} descriptions with max {max_concurrent} concurrent requests...")
+
+        # Create all tasks
+        tasks = [
+            asyncio.create_task(self.clean_description(desc, semaphore))
+            for desc in descriptions
+        ]
+
+        # Execute all tasks concurrently with progress indication
+        import tqdm.asyncio
+        results = await tqdm.asyncio.tqdm.gather(
+            *tasks,
+            desc="Cleaning descriptions",
+            unit="description"
+        )
+
+        return results
+
     async def process_bank_statement(
         self,
         pdf_path: str,
@@ -156,7 +245,10 @@ class BankStatementWorkflow:
         cache_file: str = "classification_keywords.json",
         output_file: str = "categorized_transactions.csv",
         max_concurrent: int = 8,
-        force_reclassify: bool = False
+        force_reclassify: bool = False,
+        clean_descriptions: bool = False,
+        generate_reports: bool = True,
+        report_filename: Optional[str] = None
     ) -> pd.DataFrame:
         """
         Complete workflow: process PDF, classify transactions, and categorize
@@ -168,6 +260,9 @@ class BankStatementWorkflow:
             output_file: Output file for categorized transactions
             max_concurrent: Maximum concurrent API calls for classification
             force_reclassify: If True, ignore cache and reclassify all transactions
+            clean_descriptions: If True, clean descriptions using AI
+            generate_reports: If True, automatically generate Excel reports
+            report_filename: Custom filename for Excel report (optional)
 
         Returns:
             DataFrame with categorized transactions
@@ -248,24 +343,85 @@ class BankStatementWorkflow:
         print(f"   Categorized: {categorized_count} transactions")
         print(f"   Uncategorized: {uncategorized_count} transactions")
 
-        # Step 6: Save final results
-        print(f"\n6. Saving results to {output_file}...")
+        # Step 6: Clean descriptions using AI (optional)
+        if clean_descriptions:
+            print(f"\n6. Cleaning transaction descriptions using AI...")
+            unique_descriptions = list({t.get(
+                'description', '') for t in categorized_transactions if t.get('description', '')})
+            cleaned_descriptions = await self.clean_descriptions_batch(unique_descriptions, max_concurrent)
+
+            # Create mapping from original to cleaned descriptions
+            description_mapping = dict(
+                zip(unique_descriptions, cleaned_descriptions))
+
+            # Apply cleaned descriptions to all transactions
+            for transaction in categorized_transactions:
+                original_desc = transaction.get('description', '')
+                if original_desc in description_mapping:
+                    transaction['cleaned_description'] = description_mapping[original_desc]
+                else:
+                    transaction['cleaned_description'] = original_desc
+
+            print(f"   Cleaned {len(unique_descriptions)} unique descriptions")
+        else:
+            print(f"\n6. Skipping description cleaning (disabled)")
+
+        # Step 7: Save final results
+        step_num = 7
+        print(f"\n{step_num}. Saving results to {output_file}...")
         df = pd.DataFrame(categorized_transactions)
 
         # Reorder columns for better readability
-        column_order = ['date', 'description',
-                        'category', 'debits', 'credits', 'balance']
+        if clean_descriptions:
+            column_order = ['date', 'description', 'cleaned_description',
+                            'category', 'debits', 'credits', 'balance']
+        else:
+            column_order = ['date', 'description',
+                            'category', 'debits', 'credits', 'balance']
+
         df = df[column_order]
 
         df.to_csv(output_file, index=False)
         print(f"   Saved {len(df)} categorized transactions")
 
-        # Step 7: Generate summary
-        print("\n" + "="*60)
+        # Step 8: Generate Excel reports (optional)
+        step_num += 1
+        if generate_reports:
+            print(f"\n{step_num}. Generating Excel financial reports...")
+            try:
+                report_generator = FinanceReportGenerator(output_file)
+
+                # Generate custom filename if not provided
+                if report_filename is None:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    report_filename = f"finance_report_{timestamp}.xlsx"
+
+                report_generator.generate_excel_report(report_filename)
+                print(f"   Excel report generated: {report_filename}")
+
+                # Show available months summary
+                available_months = report_generator.get_available_months()
+                month_names = [report_generator.format_month_name(
+                    m) for m in available_months]
+                print(
+                    f"   Report contains {len(available_months)} monthly sheets: {', '.join(month_names)}")
+
+            except Exception as e:
+                print(f"   Error generating reports: {e}")
+                print(
+                    "   Transaction processing completed successfully, but report generation failed")
+        else:
+            print(f"\n{step_num}. Skipping Excel report generation (disabled)")
+
+        # Step 9: Generate summary
+        step_num += 1
+        print(f"\n" + "="*60)
         print("PROCESSING SUMMARY")
         print("="*60)
         print(f"Total transactions processed: {len(df)}")
         print(f"Unique keywords in cache: {len(cache)}")
+        if clean_descriptions:
+            print(f"Descriptions cleaned: {len(unique_descriptions)}")
 
         # Category breakdown
         category_counts = df['category'].value_counts()
@@ -281,15 +437,17 @@ async def main():
     """Main function with command line argument parsing"""
 
     parser = argparse.ArgumentParser(
-        description="Process bank statement PDF and classify transactions with caching",
+        description="Process bank statement PDF, classify transactions, and generate Excel reports",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   python workflow_orchestrator.py bank_statement.pdf
-  python workflow_orchestrator.py bank_statement.pdf --password mypassword --output categorized_bank_data.csv
-  python workflow_orchestrator.py bank_statement.pdf --force-reclassify --max-concurrent 10
+  python workflow_orchestrator.py bank_statement.pdf --clean-descriptions
+  python workflow_orchestrator.py bank_statement.pdf --no-reports --output categorized_bank_data.csv
+  python workflow_orchestrator.py bank_statement.pdf --force-reclassify --max-concurrent 10 --report-filename custom_report.xlsx
 
 Note: OpenAI API key should be set in .env file as OPENAI_API_KEY=your_api_key_here
+      By default, Excel reports are automatically generated after processing.
         """
     )
 
@@ -336,6 +494,23 @@ Note: OpenAI API key should be set in .env file as OPENAI_API_KEY=your_api_key_h
         help="Ignore cache and reclassify all transactions"
     )
 
+    parser.add_argument(
+        "--clean-descriptions",
+        action="store_true",
+        help="Clean descriptions using AI"
+    )
+
+    parser.add_argument(
+        "--no-reports",
+        action="store_true",
+        help="Skip automatic Excel report generation"
+    )
+
+    parser.add_argument(
+        "--report-filename",
+        help="Custom filename for Excel report (optional)"
+    )
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -362,7 +537,10 @@ Note: OpenAI API key should be set in .env file as OPENAI_API_KEY=your_api_key_h
             cache_file=args.cache,
             output_file=args.output,
             max_concurrent=args.max_concurrent,
-            force_reclassify=args.force_reclassify
+            force_reclassify=args.force_reclassify,
+            clean_descriptions=args.clean_descriptions,
+            generate_reports=not args.no_reports,
+            report_filename=args.report_filename
         )
 
         return df

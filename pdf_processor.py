@@ -283,7 +283,7 @@ class BankStatementProcessor:
         # Validate the date
         try:
             datetime.strptime(f"{year}-{month}-{day.zfill(2)}", "%Y-%m-%d")
-            return f"{year}-{month}-{day.zfill(2)}"
+            return f"{day.zfill(2)}/{month}/{year}"  # Return DD/MM/YYYY format
         except ValueError:
             return date_str  # Return original if invalid date
 
@@ -359,7 +359,7 @@ class BankStatementProcessor:
             all_transactions)
         if not return_only:
             print("  - Cleaned amount columns (removed text, commas)")
-            print("  - Formatted dates to YYYY-MM-DD")
+            print("  - Formatted dates to DD/MM/YYYY")
 
         return processed_transactions
 
