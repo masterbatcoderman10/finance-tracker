@@ -34,6 +34,9 @@ class TransactionCategory(str, Enum):
     DEPOSITS = "Deposits"
     WITHDRAWALS = "Withdrawals"
     SERVICE_FEES = "Service Fees"
+    DONATION = "Donation"
+    TRANSPORT = "Transport"
+    HOSPITALS_AND_MEDICINE = "Hospitals and Medicine"
 
 
 class TransactionClassification(BaseModel):
@@ -51,7 +54,7 @@ class TransactionClassification(BaseModel):
 class AsyncTransactionClassifier:
     """Async transaction classifier using OpenAI Responses API"""
 
-    def __init__(self, api_key: str, model: str = "gpt-4o-2024-08-06"):
+    def __init__(self, api_key: str, model: str = "o4-mini"):
         """
         Initialize the transaction classifier
 
@@ -77,11 +80,17 @@ Available Categories:
 - Salary: Income, wages, payroll deposits
 - Shopping: General retail purchases, online shopping, electronics, clothing
 - Investment: Stock purchases, trading platforms, investment services
-- Deposits: ATM deposits, cash deposits
+- Deposits: ATM deposits, cash deposits, SDM deposits (Smart Deposit Machine)
 - Withdrawals: ATM withdrawals, cash withdrawals
 - Service Fees: Bank charges, transaction fees, maintenance fees, processing fees, VAT, etc.
+- Donation: Charitable donations, religious contributions, fundraising, zakat
+- Transport: Public transport, taxis, ride-sharing (Uber, Careem), parking fees, tolls
+- Hospitals and Medicine: Medical expenses, hospital bills, doctor visits, medicines, health insurance
 
-Important: Services with Pro/Premium/Plus tiers should be classified as Subscription regardless of base service type (e.g., TALABAT PRO is Subscription, not Restaurants).
+Important Notes:
+- SDM stands for Smart Deposit Machine, which is where withdrawals and deposits occur
+- Services with Pro/Premium/Plus tiers should be classified as Subscription regardless of base service type (e.g., TALABAT PRO is Subscription, not Restaurants)
+- SDM transactions should be classified as either Deposits or Withdrawals based on the transaction type
 
 For each transaction:
 1. Analyze the merchant name and transaction details
@@ -134,7 +143,8 @@ For each transaction:
         self,
         transactions: List[str],
         max_concurrent: int = 8,
-        return_only: bool = False
+        return_only: bool = False,
+        show_progress: bool = True
     ) -> List[dict]:
         """
         Classify multiple transactions with semaphore-controlled concurrency
@@ -143,6 +153,7 @@ For each transaction:
             transactions: List of transaction description strings
             max_concurrent: Maximum number of concurrent API calls
             return_only: If True, suppress progress output and return data only
+            show_progress: If True, show progress bar during classification
 
         Returns:
             List of classification result dictionaries
@@ -162,16 +173,16 @@ For each transaction:
         ]
 
         # Execute all tasks concurrently with progress bar using tqdm.asyncio.tqdm.gather
-        if return_only:
-            # Silent execution without progress bar
-            results = await asyncio.gather(*tasks)
-        else:
+        if show_progress:
             # With progress bar
             results = await tqdm.asyncio.tqdm.gather(
                 *tasks,
                 desc="Classifying transactions",
                 unit="transaction"
             )
+        else:
+            # Silent execution without progress bar
+            results = await asyncio.gather(*tasks)
 
         return results
 
@@ -337,7 +348,8 @@ For each transaction:
         output_file: str = "classified_transactions.csv",
         keywords_file: str = "classification_keywords.json",
         max_concurrent: int = 8,
-        return_only: bool = False
+        return_only: bool = False,
+        show_progress: bool = True
     ) -> pd.DataFrame:
         """
         Complete workflow: classify transactions and generate analysis
@@ -351,6 +363,7 @@ For each transaction:
             keywords_file: Output JSON file for keywords
             max_concurrent: Maximum concurrent API calls
             return_only: If True, skip file saving and verbose output
+            show_progress: If True, show progress bar during classification
 
         Returns:
             DataFrame with classification results
@@ -368,7 +381,7 @@ For each transaction:
                 transactions = self._get_sample_transactions()
 
         # Classify transactions
-        results = await self.classify_transactions(transactions, max_concurrent, return_only)
+        results = await self.classify_transactions(transactions, max_concurrent, return_only, show_progress)
 
         # Convert to DataFrame
         df = pd.DataFrame(results)

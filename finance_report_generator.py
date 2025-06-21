@@ -147,18 +147,26 @@ class FinanceReportGenerator:
         month_data = self.df[(self.df['month_year'] == month_year) & (
             self.df['date'].notna())]
 
-        # Determine which description column to use
-        description_column = 'cleaned_description' if 'cleaned_description' in self.df.columns else 'description'
+        # Check if cleaned descriptions are available
+        has_cleaned_descriptions = 'cleaned_description' in self.df.columns
 
         # Determine column names based on transaction type
         if transaction_type == 'credits':
             amount_column = 'credits'
             display_column = 'Credits (AED)'
-            columns = ['Date', 'Description', 'Category', 'Credits (AED)']
+            if has_cleaned_descriptions:
+                columns = ['Date', 'Raw Description',
+                           'Clean Description', 'Category', 'Credits (AED)']
+            else:
+                columns = ['Date', 'Description', 'Category', 'Credits (AED)']
         else:  # debits
             amount_column = 'debits'
             display_column = 'Debits (AED)'
-            columns = ['Date', 'Description', 'Category', 'Debits (AED)']
+            if has_cleaned_descriptions:
+                columns = ['Date', 'Raw Description',
+                           'Clean Description', 'Category', 'Debits (AED)']
+            else:
+                columns = ['Date', 'Description', 'Category', 'Debits (AED)']
 
         if month_data.empty:
             return pd.DataFrame(columns=columns)
@@ -166,9 +174,13 @@ class FinanceReportGenerator:
         # Sort by category and date
         sorted_df = month_data.sort_values(by=['category', 'date'])
 
-        # Select only required columns
-        sorted_df = sorted_df[[
-            'date', description_column, 'category', amount_column]]
+        # Select required columns based on whether cleaned descriptions are available
+        if has_cleaned_descriptions:
+            sorted_df = sorted_df[[
+                'date', 'description', 'cleaned_description', 'category', amount_column]]
+        else:
+            sorted_df = sorted_df[[
+                'date', 'description', 'category', amount_column]]
 
         # Drop rows where amount is NaN or 0
         sorted_df = sorted_df.dropna(subset=[amount_column])
@@ -198,22 +210,80 @@ class FinanceReportGenerator:
         months = valid_months.unique()
         return sorted([str(month) for month in months if pd.notna(month)])
 
-    def generate_month_report(self, month_year: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    def get_month_overview(self, month_year: str) -> Dict[str, float]:
         """
-        Generate spending by category, income transaction log, and sorted transaction log for a specific month
+        Calculate overview metrics for a specific month
 
         Args:
             month_year: Month-year string (e.g., "2025-04")
 
         Returns:
-            Tuple of (spending_by_category_df, income_transaction_log_df, sorted_transaction_log_df)
+            Dictionary with starting_balance, finishing_balance, and total_spent
         """
+        # Filter by month and exclude rows with invalid dates
+        month_data = self.df[(self.df['month_year'] == month_year) & (
+            self.df['date'].notna())]
+
+        if month_data.empty:
+            return {
+                'starting_balance': 0.0,
+                'finishing_balance': 0.0,
+                'total_spent': 0.0
+            }
+
+        # Sort by date to ensure proper order
+        month_data = month_data.sort_values('date')
+
+        # Melt the dataframe exactly as specified
+        melted_df = month_data.melt(
+            id_vars=['date', 'description', 'category', 'balance'],
+            value_vars=['debits', 'credits'],
+            var_name='type',
+            value_name='amount'
+        )
+
+        # Calculate initial balance
+        first_row = melted_df.iloc[0]
+        transaction_type = first_row['type']
+        initial_balance = first_row['balance']
+
+        if transaction_type == 'debits':
+            initial_balance += first_row['amount']
+        else:
+            initial_balance -= first_row['amount']
+
+        # Calculate final balance
+        final_balance = melted_df['balance'].iloc[-1]
+
+        # Calculate total spent (excluding specific categories)
+        subset_df_cat = month_data['category'].isin(
+            ['Deposits', 'Withdrawals', 'Money Transfer'])
+        subset_df = month_data[~subset_df_cat]
+        total_spent = subset_df['debits'].sum()
+
+        return {
+            'starting_balance': round(initial_balance, 2),
+            'finishing_balance': round(final_balance, 2),
+            'total_spent': round(total_spent, 2)
+        }
+
+    def generate_month_report(self, month_year: str) -> Tuple[Dict[str, float], pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """
+        Generate overview metrics, spending by category, income transaction log, and sorted transaction log for a specific month
+
+        Args:
+            month_year: Month-year string (e.g., "2025-04")
+
+        Returns:
+            Tuple of (overview_metrics, spending_by_category_df, income_transaction_log_df, sorted_transaction_log_df)
+        """
+        overview_metrics = self.get_month_overview(month_year)
         spending_df = self.get_spending_by_category(month_year)
         income_log_df = self.get_sorted_transaction_log(month_year, 'credits')
         transaction_log_df = self.get_sorted_transaction_log(
             month_year, 'debits')
 
-        return spending_df, income_log_df, transaction_log_df
+        return overview_metrics, spending_df, income_log_df, transaction_log_df
 
     def format_month_name(self, month_year: str) -> str:
         """
@@ -257,15 +327,42 @@ class FinanceReportGenerator:
                 sheet_name = self.format_month_name(month_year)
                 print(f"Processing {sheet_name}...")
 
-                spending_df, income_log_df, transaction_log_df = self.generate_month_report(
+                overview_metrics, spending_df, income_log_df, transaction_log_df = self.generate_month_report(
                     month_year)
 
                 current_row = 0
 
-                # Add title and spending by category table
+                # Add title and overview metrics
                 title_df1 = pd.DataFrame(
-                    [[f'SPENDING BY CATEGORY - {sheet_name.upper()}']])
+                    [[f'OVERVIEW - {sheet_name.upper()}']])
                 title_df1.to_excel(writer, sheet_name=sheet_name, startrow=current_row,
+                                   index=False, header=False)
+                current_row += 2  # Title + blank row
+
+                if not overview_metrics:
+                    no_data_df = pd.DataFrame(
+                        [['No overview data available for this month']])
+                    no_data_df.to_excel(writer, sheet_name=sheet_name, startrow=current_row,
+                                        index=False, header=False)
+                    current_row += 3 + 8  # Message + 8 blank rows
+                else:
+                    # Create properly formatted overview table
+                    overview_data = [
+                        ['Starting Balance', overview_metrics['starting_balance']],
+                        ['Finishing Balance', overview_metrics['finishing_balance']],
+                        ['Total Spent', overview_metrics['total_spent']]
+                    ]
+                    overview_df = pd.DataFrame(overview_data, columns=[
+                                               'Metric', 'Amount (AED)'])
+                    overview_df.to_excel(
+                        writer, sheet_name=sheet_name, startrow=current_row, index=False)
+                    # Data + header + 8 blank rows
+                    current_row += len(overview_df) + 1 + 8
+
+                # Add title and spending by category table
+                title_df2 = pd.DataFrame(
+                    [[f'SPENDING BY CATEGORY - {sheet_name.upper()}']])
+                title_df2.to_excel(writer, sheet_name=sheet_name, startrow=current_row,
                                    index=False, header=False)
                 current_row += 2  # Title + blank row
 
@@ -282,9 +379,9 @@ class FinanceReportGenerator:
                     current_row += 3 + 8  # Message + 8 blank rows
 
                 # Add title and income transaction log table
-                title_df2 = pd.DataFrame(
+                title_df3 = pd.DataFrame(
                     [[f'INCOME TRANSACTION LOG - {sheet_name.upper()}']])
-                title_df2.to_excel(writer, sheet_name=sheet_name, startrow=current_row,
+                title_df3.to_excel(writer, sheet_name=sheet_name, startrow=current_row,
                                    index=False, header=False)
                 current_row += 2
 
@@ -301,9 +398,9 @@ class FinanceReportGenerator:
                     current_row += 3 + 8  # Message + 8 blank rows
 
                 # Add title and sorted transaction log table
-                title_df3 = pd.DataFrame(
+                title_df4 = pd.DataFrame(
                     [[f'SORTED TRANSACTION LOG - {sheet_name.upper()}']])
-                title_df3.to_excel(writer, sheet_name=sheet_name, startrow=current_row,
+                title_df4.to_excel(writer, sheet_name=sheet_name, startrow=current_row,
                                    index=False, header=False)
                 current_row += 2
 
@@ -331,8 +428,19 @@ class FinanceReportGenerator:
         print(f"FINANCIAL ANALYSIS FOR {month_name.upper()}")
         print(f"{'='*60}")
 
-        spending_df, income_log_df, transaction_log_df = self.generate_month_report(
+        overview_metrics, spending_df, income_log_df, transaction_log_df = self.generate_month_report(
             month_year)
+
+        print(f"\nOVERVIEW:")
+        print("-" * 40)
+        if not overview_metrics:
+            print("No overview data available for this month")
+        else:
+            print(
+                f"Starting Balance: {overview_metrics['starting_balance']} AED")
+            print(
+                f"Finishing Balance: {overview_metrics['finishing_balance']} AED")
+            print(f"Total Spent: {overview_metrics['total_spent']} AED")
 
         print(f"\nSPENDING BY CATEGORY:")
         print("-" * 40)

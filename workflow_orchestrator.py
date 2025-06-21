@@ -94,7 +94,8 @@ class BankStatementWorkflow:
 
         # Check if any cached keyword is in the description
         for cached_keyword, category in cache.items():
-            if cached_keyword in description_upper:
+            # Skip empty keywords as they would match all descriptions
+            if cached_keyword and cached_keyword in description_upper:
                 return category
 
         return None
@@ -184,7 +185,7 @@ Examples:
 Return only the cleaned description, nothing else."""
 
                 response = await self.openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model="gpt-4.1-nano",
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": f"Clean this transaction description: {description}"}
@@ -248,7 +249,9 @@ Return only the cleaned description, nothing else."""
         force_reclassify: bool = False,
         clean_descriptions: bool = False,
         generate_reports: bool = True,
-        report_filename: Optional[str] = None
+        report_filename: Optional[str] = None,
+        save_classification_details: bool = False,
+        classification_details_file: str = "classification_results.csv"
     ) -> pd.DataFrame:
         """
         Complete workflow: process PDF, classify transactions, and categorize
@@ -263,6 +266,8 @@ Return only the cleaned description, nothing else."""
             clean_descriptions: If True, clean descriptions using AI
             generate_reports: If True, automatically generate Excel reports
             report_filename: Custom filename for Excel report (optional)
+            save_classification_details: If True, save detailed classification results with reasoning and confidence
+            classification_details_file: Path to save classification details file
 
         Returns:
             DataFrame with categorized transactions
@@ -303,6 +308,7 @@ Return only the cleaned description, nothing else."""
             f"   Found {len(uncached_descriptions)} unique descriptions needing classification")
 
         # Step 4: Classify uncached transactions
+        classification_results = pd.DataFrame()  # Initialize empty DataFrame
         if uncached_descriptions:
             print(
                 f"\n4. Classifying {len(uncached_descriptions)} new transaction types...")
@@ -310,7 +316,8 @@ Return only the cleaned description, nothing else."""
             classification_results = await self.classifier.classify_and_analyze(
                 transactions=uncached_descriptions,
                 max_concurrent=max_concurrent,
-                return_only=True
+                return_only=True,
+                show_progress=True
             )
 
             # Update cache with new classifications
@@ -430,6 +437,19 @@ Return only the cleaned description, nothing else."""
             percentage = (count / len(df)) * 100
             print(f"  {category}: {count} ({percentage:.1f}%)")
 
+        # Step 10: Save classification details (optional)
+        step_num += 1
+        if save_classification_details and not classification_results.empty:
+            print(
+                f"\n{step_num}. Saving classification details to {classification_details_file}...")
+            classification_results.to_csv(
+                classification_details_file, index=False)
+            print(
+                f"   Saved {len(classification_results)} classification details")
+        elif save_classification_details and classification_results.empty:
+            print(
+                f"\n{step_num}. No new classifications to save - all transactions were already in cache")
+
         return df
 
 
@@ -511,6 +531,18 @@ Note: OpenAI API key should be set in .env file as OPENAI_API_KEY=your_api_key_h
         help="Custom filename for Excel report (optional)"
     )
 
+    parser.add_argument(
+        "--save-classification-details",
+        action="store_true",
+        help="Save detailed classification results"
+    )
+
+    parser.add_argument(
+        "--classification-details-file",
+        default="classification_results.csv",
+        help="Path to save classification details file (default: classification_results.csv)"
+    )
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -540,7 +572,9 @@ Note: OpenAI API key should be set in .env file as OPENAI_API_KEY=your_api_key_h
             force_reclassify=args.force_reclassify,
             clean_descriptions=args.clean_descriptions,
             generate_reports=not args.no_reports,
-            report_filename=args.report_filename
+            report_filename=args.report_filename,
+            save_classification_details=args.save_classification_details,
+            classification_details_file=args.classification_details_file
         )
 
         return df
