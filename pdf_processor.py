@@ -295,7 +295,7 @@ class BankStatementProcessor:
             transactions: Raw transaction data
 
         Returns:
-            Cleaned transaction data with proper types
+            Cleaned transaction data with proper types and transaction_type column
         """
         processed = []
 
@@ -308,6 +308,37 @@ class BankStatementProcessor:
                 'balance': self.clean_amount(transaction.get('balance', ''))
             }
             processed.append(processed_transaction)
+
+        # Convert to DataFrame for melting operation
+        df = pd.DataFrame(processed)
+
+        # Create transaction_type column by melting and determining the type
+        # Melt the dataframe to identify transaction types
+        melted_df = df.melt(
+            id_vars=['date', 'description', 'balance'],
+            value_vars=['debits', 'credits'],
+            var_name='transaction_type',
+            value_name='amount'
+        )
+
+        # Filter out rows where amount is None or 0 (no transaction occurred)
+        melted_df = melted_df[(melted_df['amount'].notna())
+                              & (melted_df['amount'] > 0)]
+
+        # Create a mapping from original index to transaction type
+        transaction_type_map = {}
+        for idx, row in df.iterrows():
+            if row['debits'] and row['debits'] > 0:
+                transaction_type_map[idx] = 'debits'
+            elif row['credits'] and row['credits'] > 0:
+                transaction_type_map[idx] = 'credits'
+            else:
+                transaction_type_map[idx] = 'unknown'
+
+        # Add transaction_type back to the original processed data
+        for idx, transaction in enumerate(processed):
+            transaction['transaction_type'] = transaction_type_map.get(
+                idx, 'unknown')
 
         return processed
 

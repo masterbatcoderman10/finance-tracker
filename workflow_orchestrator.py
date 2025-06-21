@@ -381,10 +381,10 @@ Return only the cleaned description, nothing else."""
         # Reorder columns for better readability
         if clean_descriptions:
             column_order = ['date', 'description', 'cleaned_description',
-                            'category', 'debits', 'credits', 'balance']
+                            'category', 'debits', 'credits', 'balance', 'transaction_type']
         else:
             column_order = ['date', 'description',
-                            'category', 'debits', 'credits', 'balance']
+                            'category', 'debits', 'credits', 'balance', 'transaction_type']
 
         df = df[column_order]
 
