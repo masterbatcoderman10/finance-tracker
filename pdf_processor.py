@@ -21,7 +21,7 @@ class BankStatementProcessor:
         self.table_settings = {
             'vertical_strategy': 'lines',
             'horizontal_strategy': 'text',
-            'snap_y_tolerance': 7,
+            'snap_y_tolerance': 4,
             'intersection_tolerance': 5,
         }
 
@@ -88,7 +88,7 @@ class BankStatementProcessor:
 
         # Skip header rows: 1 row for first page, 2 rows for subsequent pages (includes Arabic header)
         if page_number == 1:
-            ix = 1  # Skip 1 header row on first page
+            ix = 2  # Skip 1 header row on first page
             print(f"  Skipping 1 header row on page {page_number}")
         else:
             ix = 2  # Skip 2 header rows on subsequent pages (regular + Arabic)
@@ -96,40 +96,20 @@ class BankStatementProcessor:
                 f"  Skipping 2 header rows on page {page_number} (regular + Arabic)")
 
         max_ix = len(table)
+        date = ''
+        description = ''
+        debits = ''
+        credits = ''
+        balance = ''
 
         while ix < max_ix:
             row = table[ix]
+            if any(row):
+                # Clean the row data and ensure we have at least 5 columns
+                cleaned_row = [self.clean_cell_data(cell) for cell in row]
+                while len(cleaned_row) < 5:
+                    cleaned_row.append("")
 
-            # Skip empty rows
-            if not any(row):
-                ix += 1
-                continue
-
-            # Clean the row data
-            cleaned_row = [self.clean_cell_data(cell) for cell in row]
-
-            # Ensure we have at least 5 columns (date, description, debits, credits, balance)
-            while len(cleaned_row) < 5:
-                cleaned_row.append("")
-
-            # Skip rows with "carried forward" or "brought forward" in description
-            potential_description = cleaned_row[1] if len(
-                cleaned_row) > 1 else ""
-            if potential_description and any(phrase in potential_description.upper() for phrase in ['CARRIED FORWARD', 'BROUGHT FORWARD']):
-                print(
-                    f"  Skipping balance transfer row: {potential_description[:50]}...")
-                ix += 1
-                continue
-
-            date = None
-            description = None
-            debits = None
-            credits = None
-            balance = None
-
-            row_found = False
-
-            while not row_found and ix < max_ix:
                 potential_date = cleaned_row[0] if len(cleaned_row) > 0 else ""
                 potential_description = cleaned_row[1] if len(
                     cleaned_row) > 1 else ""
@@ -140,81 +120,49 @@ class BankStatementProcessor:
                 potential_balance = cleaned_row[4] if len(
                     cleaned_row) > 4 else ""
 
-                # Check if this is a complete row (has date and at least one amount)
-                if potential_date and (potential_debits or potential_credits or potential_balance):
+                # Skip rows with "carried forward" or "brought forward" in description
+                if potential_description and any(phrase in potential_description.upper() for phrase in ['CARRIED FORWARD', 'BROUGHT FORWARD']):
+                    print(
+                        f"  Skipping balance transfer row: {potential_description[:50]}...")
+                    ix += 1
+                    continue
+
+                # Accumulate values
+                date += potential_date if potential_date else ''
+                description += potential_description if potential_description else ''
+                debits += potential_debits if potential_debits else ''
+                credits += potential_credits if potential_credits else ''
+                balance += potential_balance if potential_balance else ''
+
+                ix += 1
+            else:
+                # Reached end of previous row (empty row)
+                if date or description or debits or credits or balance:
                     processed_rows.append({
-                        'date': potential_date,
-                        'description': potential_description,
-                        'debits': potential_debits,
-                        'credits': potential_credits,
-                        'balance': potential_balance
+                        'date': date.strip(),
+                        'description': description.strip(),
+                        'debits': debits.strip(),
+                        'credits': credits.strip(),
+                        'balance': balance.strip()
                     })
-                    ix += 1
-                    row_found = True
 
-                elif potential_date and potential_description:
-                    # Start of a new multi-line row
-                    date = potential_date
-                    description = potential_description
-                    ix += 1
-                    if ix < max_ix:
-                        cleaned_row = [self.clean_cell_data(
-                            cell) for cell in table[ix]]
-                        while len(cleaned_row) < 5:
-                            cleaned_row.append("")
+                # Reset for next transaction
+                date = ''
+                description = ''
+                debits = ''
+                credits = ''
+                balance = ''
+                ix += 1
 
-                elif potential_description and (potential_debits or potential_credits or potential_balance):
-                    # End of a multi-line row with description continuation
-                    if description:
-                        description = description + ' ' + potential_description
-                    else:
-                        description = potential_description
-                    debits = potential_debits
-                    credits = potential_credits
-                    balance = potential_balance
-
-                    processed_rows.append({
-                        'date': date,
-                        'description': description,
-                        'debits': debits,
-                        'credits': credits,
-                        'balance': balance
-                    })
-                    ix += 1
-                    row_found = True
-
-                elif (potential_debits or potential_credits or potential_balance):
-                    # End of row with amounts only
-                    debits = potential_debits
-                    credits = potential_credits
-                    balance = potential_balance
-
-                    processed_rows.append({
-                        'date': date,
-                        'description': description,
-                        'debits': debits,
-                        'credits': credits,
-                        'balance': balance
-                    })
-                    ix += 1
-                    row_found = True
-
-                elif potential_description:
-                    # Continuation of description
-                    if description:
-                        description = description + ' ' + potential_description
-                    else:
-                        description = potential_description
-                    ix += 1
-                    if ix < max_ix:
-                        cleaned_row = [self.clean_cell_data(
-                            cell) for cell in table[ix]]
-                        while len(cleaned_row) < 5:
-                            cleaned_row.append("")
-                else:
-                    # Skip this row
-                    ix += 1
-                    row_found = True
+        # Handle last transaction if we reach end of table without empty row
+        if date or description or debits or credits or balance:
+            processed_rows.append({
+                'date': date.strip(),
+                'description': description.strip(),
+                'debits': debits.strip(),
+                'credits': credits.strip(),
+                'balance': balance.strip()
+            })
 
         return processed_rows
 

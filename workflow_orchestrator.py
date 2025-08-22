@@ -123,7 +123,9 @@ class BankStatementWorkflow:
         type_cache = cache.get(transaction_type, {})
         for cached_keyword, category in type_cache.items():
             # Skip empty keywords as they would match all descriptions
-            if cached_keyword and cached_keyword in description_upper:
+            # print(
+            #     f"Checking keyword '{cached_keyword}' in type '{transaction_type}' for description: {description_upper[:50]}...")
+            if cached_keyword and cached_keyword.upper() in description_upper:
                 return category
 
         # If not found in type-specific cache, check 'unknown' cache as fallback

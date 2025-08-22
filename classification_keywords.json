@@ -1,5 +1,7 @@
 {
-  "unknown": {},
+  "unknown": {
+    "Description": "Service Fees"
+  },
   "debits": {
     "Hospital Dubai": "Hospitals and Medicine",
     "NMC SPECIALTY": "Hospitals and Medicine",
@@ -51,10 +53,8 @@
     "ADNOC AL QUSAIS": "Petrol",
     "GRAND SUPER": "Grocery",
     "MARKET LLC": "Grocery",
-    "CARD": "Withdrawals",
     "NOON FOOD": "Restaurants",
     "SUBSCRIPTION": "Subscription",
-    "CARD NO.400536": "Shopping",
     "QUSAIS DUBAI": "Shopping",
     "PHARMACY": "Grocery",
     "MINUTES ONLINE": "Shopping",
@@ -87,7 +87,30 @@
     "BRIT Star Mobile": "Shopping",
     "ANTHROPIC": "Shopping",
     "GitHub": "Subscription",
-    "LaunchGood": "Donation"
+    "LaunchGood": "Donation",
+    "RESTAURANT SHARJAH": "Restaurants",
+    "GOOGLE": "Shopping",
+    "VAT": "Service Fees",
+    "SAQR AL AAELAT MINIMAR": "Grocery",
+    "AL HUFOOF GROCERY": "Grocery",
+    "Noon": "Shopping",
+    "EMARAT": "Petrol",
+    "MINIMAR": "Grocery",
+    "NMC MEDICAL CENT": "Hospitals and Medicine",
+    "TABBY FZ LLC": "Recurring Payments",
+    "TABBY": "Recurring Payments",
+    "Malabar Gold": "Investment",
+    "Smart DubaiGovernment": "Service Fees",
+    "BAIT AL SHIFAA PHARABU": "Hospitals and Medicine",
+    "NOON Minutes": "Shopping",
+    "GHADEER TOWERDUBAI": "Shopping",
+    "getstake.com": "Investment",
+    "Smart Dubai Government": "Service Fees",
+    "Amazon PrimeSubscript": "Subscription",
+    "LastPass.com": "Subscription",
+    "NOON": "Shopping",
+    "LASTPASS.COM": "Subscription",
+    "getstake": "Investment"
   },
   "credits": {
     "ZUBAIR ATHAR": "Money Transfer",
@@ -105,6 +128,8 @@
     "IPI TT REF": "Money Transfer",
     "AFEEF TOURISM LLC": "Salary",
     "UNION COOP NAHDA": "Deposits",
-    "GITHUB": "Subscription"
+    "GITHUB": "Subscription",
+    "AHEMED SHOHAB": "Money Transfer",
+    "SUBSCRIPTION": "Subscription"
   }
 }
