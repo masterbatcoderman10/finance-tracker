@@ -57,3 +57,7 @@ typing-inspection==0.4.1
 typing_extensions==4.13.2
 tzdata==2025.2
 wcwidth==0.2.13
+
+# Streamlit dependencies
+streamlit>=1.28.0
+openpyxl>=3.0.0

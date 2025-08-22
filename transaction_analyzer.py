@@ -54,7 +54,7 @@ class TransactionClassification(BaseModel):
 class AsyncTransactionClassifier:
     """Async transaction classifier using OpenAI Responses API"""
 
-    def __init__(self, api_key: str, model: str = "o4-mini"):
+    def __init__(self, api_key: str, model: str = "gpt-4.1-mini"):
         """
         Initialize the transaction classifier
 
@@ -91,31 +91,40 @@ Important Notes:
 - SDM stands for Smart Deposit Machine, which is where withdrawals and deposits occur
 - Services with Pro/Premium/Plus tiers should be classified as Subscription regardless of base service type (e.g., TALABAT PRO is Subscription, not Restaurants)
 - SDM transactions should be classified as either Deposits or Withdrawals based on the transaction type
+- Consider the transaction type (DEBITS/CREDITS) when classifying:
+  * DEBITS: Money going out (expenses, purchases, withdrawals, transfers out)
+  * CREDITS: Money coming in (income, deposits, transfers in, refunds)
+- The same merchant may have different categories based on transaction type (e.g., refunds vs purchases)
 
 For each transaction:
-1. Analyze the merchant name and transaction details
-2. Identify the most distinctive keyword(s) for future matching
-3. Classify into the most appropriate category
-4. Provide confidence score (0.0-1.0)"""
+1. Consider both the transaction type (DEBITS/CREDITS) and description
+2. Analyze the merchant name and transaction details
+3. Identify the most distinctive keyword(s) for future matching
+4. Classify into the most appropriate category based on transaction type and description
+5. Provide confidence score (0.0-1.0)"""
 
-    async def classify_single_transaction(self, transaction: str, semaphore: asyncio.Semaphore) -> dict:
+    async def classify_single_transaction(self, transaction: str, semaphore: asyncio.Semaphore, transaction_type: str = "unknown") -> dict:
         """
         Classify a single transaction using semaphore for rate limiting
 
         Args:
             transaction: Transaction description string
             semaphore: Asyncio semaphore for rate limiting
+            transaction_type: Type of transaction (debits, credits, unknown)
 
         Returns:
             Dictionary with classification results
         """
         async with semaphore:
             try:
+                # Build context-aware prompt based on transaction type
+                transaction_context = f"Transaction Type: {transaction_type.upper()}\nDescription: {transaction}"
+
                 response = await self.client.responses.parse(
                     model=self.model,
                     input=[
                         {"role": "system", "content": self.system_prompt},
-                        {"role": "user", "content": transaction}
+                        {"role": "user", "content": transaction_context}
                     ],
                     text_format=TransactionClassification,
                 )
@@ -123,6 +132,7 @@ For each transaction:
                 result = response.output_parsed
                 return {
                     "transaction": transaction,
+                    "transaction_type": transaction_type,
                     "reasoning": result.reasoning,
                     "keyword": result.keyword,
                     "category": result.category.value,
@@ -133,6 +143,7 @@ For each transaction:
                 print(f"Error classifying transaction: {e}")
                 return {
                     "transaction": transaction,
+                    "transaction_type": transaction_type,
                     "reasoning": f"Error: {str(e)}",
                     "keyword": "ERROR",
                     "category": "Shopping",
@@ -141,7 +152,7 @@ For each transaction:
 
     async def classify_transactions(
         self,
-        transactions: List[str],
+        transactions: List[dict],
         max_concurrent: int = 8,
         return_only: bool = False,
         show_progress: bool = True
@@ -150,7 +161,7 @@ For each transaction:
         Classify multiple transactions with semaphore-controlled concurrency
 
         Args:
-            transactions: List of transaction description strings
+            transactions: List of transaction dictionaries with 'description' and 'transaction_type' fields
             max_concurrent: Maximum number of concurrent API calls
             return_only: If True, suppress progress output and return data only
             show_progress: If True, show progress bar during classification
@@ -166,11 +177,20 @@ For each transaction:
                 f"Processing {len(transactions)} transactions with max {max_concurrent} concurrent requests...")
 
         # Create all tasks explicitly using asyncio.create_task
-        tasks = [
-            asyncio.create_task(
-                self.classify_single_transaction(transaction, semaphore))
-            for transaction in transactions
-        ]
+        tasks = []
+        for transaction in transactions:
+            if isinstance(transaction, dict):
+                description = transaction.get('description', '')
+                transaction_type = transaction.get(
+                    'transaction_type', 'unknown')
+            else:
+                # Backward compatibility for string inputs
+                description = str(transaction)
+                transaction_type = 'unknown'
+
+            task = asyncio.create_task(
+                self.classify_single_transaction(description, semaphore, transaction_type))
+            tasks.append(task)
 
         # Execute all tasks concurrently with progress bar using tqdm.asyncio.tqdm.gather
         if show_progress:
@@ -321,27 +341,51 @@ For each transaction:
 
     def export_keywords(self, df: pd.DataFrame, filename: str = "classification_keywords.json"):
         """
-        Export keywords mapped to their categories as JSON
+        Export keywords mapped to their categories as hierarchical JSON organized by transaction type
 
         Args:
             df: DataFrame with classification results
             filename: Output filename for keywords
         """
-        # Create keyword-to-category mapping
-        keyword_to_category = {}
+        # Create hierarchical keyword-to-category mapping by transaction type
+        hierarchical_keywords = {
+            'unknown': {},
+            'debits': {},
+            'credits': {}
+        }
+
         for _, row in df.iterrows():
-            keyword_to_category[row['keyword']] = row['category']
+            keyword = row['keyword']
+            category = row['category']
+            transaction_type = row.get('transaction_type', 'unknown')
+
+            # Ensure transaction type exists in the structure
+            if transaction_type not in hierarchical_keywords:
+                hierarchical_keywords[transaction_type] = {}
+
+            # Add keyword to the appropriate transaction type section
+            if keyword and keyword != 'ERROR':
+                hierarchical_keywords[transaction_type][keyword] = category
 
         # Save as JSON
         with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(keyword_to_category, f, indent=2, ensure_ascii=False)
+            json.dump(hierarchical_keywords, f, indent=2, ensure_ascii=False)
+
+        # Calculate totals for reporting
+        total_keywords = sum(len(type_cache)
+                             for type_cache in hierarchical_keywords.values())
 
         print(f"Keywords exported to '{filename}'")
-        print(f"Total unique keywords: {len(keyword_to_category)}")
+        print(f"Total unique keywords: {total_keywords}")
+
+        # Show breakdown by transaction type
+        for transaction_type, type_cache in hierarchical_keywords.items():
+            if type_cache:
+                print(f"  {transaction_type}: {len(type_cache)} keywords")
 
     async def classify_and_analyze(
         self,
-        transactions: Optional[List[str]] = None,
+        transactions: Optional[List] = None,
         input_file: Optional[str] = "transactions.txt",
         csv_file: Optional[str] = None,
         csv_column: Optional[str] = None,
@@ -355,7 +399,7 @@ For each transaction:
         Complete workflow: classify transactions and generate analysis
 
         Args:
-            transactions: List of transactions (if None, loads from file)
+            transactions: List of transactions (strings or dicts with 'description' and 'transaction_type')
             input_file: Input text file path for transactions
             csv_file: Input CSV file path for transactions
             csv_column: Column name in CSV file containing transactions
@@ -371,21 +415,26 @@ For each transaction:
         # Load transactions
         if transactions is None:
             if csv_file and csv_column:
-                transactions = self.load_transactions_from_csv(
+                transaction_strings = self.load_transactions_from_csv(
                     csv_file, csv_column)
             else:
-                transactions = self.load_transactions_from_file(input_file)
+                transaction_strings = self.load_transactions_from_file(
+                    input_file)
 
-            if not transactions:
+            if not transaction_strings:
                 # Use sample data if no file found
-                transactions = self._get_sample_transactions()
+                transaction_strings = self._get_sample_transactions()
+
+            # Convert strings to transaction dictionaries for backward compatibility
+            transactions = [{'description': desc, 'transaction_type': 'unknown'}
+                            for desc in transaction_strings]
 
         # Classify transactions
         results = await self.classify_transactions(transactions, max_concurrent, return_only, show_progress)
 
         # Convert to DataFrame
         df = pd.DataFrame(results)
-        column_order = ["transaction", "category",
+        column_order = ["transaction", "transaction_type", "category",
                         "keyword", "confidence", "reasoning"]
         df = df[column_order]
 

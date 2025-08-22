@@ -38,7 +38,7 @@ class BankStatementWorkflow:
         self.openai_client = AsyncOpenAI(api_key=api_key)
         self.keyword_cache = {}
 
-    def load_keyword_cache(self, cache_file: str) -> Dict[str, str]:
+    def load_keyword_cache(self, cache_file: str) -> Dict[str, Dict[str, str]]:
         """
         Load existing keyword cache from JSON file
 
@@ -46,13 +46,37 @@ class BankStatementWorkflow:
             cache_file: Path to keyword cache JSON file
 
         Returns:
-            Dictionary mapping keywords to categories
+            Hierarchical dictionary mapping transaction types to keyword-category mappings
+            Structure: {transaction_type: {keyword: category}}
         """
         if os.path.exists(cache_file):
             try:
                 with open(cache_file, 'r', encoding='utf-8') as f:
                     cache = json.load(f)
-                print(f"Loaded {len(cache)} cached keywords from {cache_file}")
+
+                # Check if this is the old flat structure and convert to hierarchical
+                if cache and isinstance(list(cache.values())[0], str):
+                    print(
+                        f"Converting old cache format to new hierarchical structure...")
+                    old_cache = cache
+                    cache = {
+                        'unknown': old_cache,
+                        'debits': {},
+                        'credits': {}
+                    }
+
+                # Ensure the cache has the expected structure
+                if 'unknown' not in cache:
+                    cache['unknown'] = {}
+                if 'debits' not in cache:
+                    cache['debits'] = {}
+                if 'credits' not in cache:
+                    cache['credits'] = {}
+
+                total_keywords = sum(len(type_cache)
+                                     for type_cache in cache.values())
+                print(
+                    f"Loaded {total_keywords} cached keywords from {cache_file}")
                 return cache
             except Exception as e:
                 print(f"Warning: Could not load cache file {cache_file}: {e}")
@@ -60,28 +84,31 @@ class BankStatementWorkflow:
             print(
                 f"Cache file {cache_file} not found, starting with empty cache")
 
-        return {}
+        return {'unknown': {}, 'debits': {}, 'credits': {}}
 
-    def save_keyword_cache(self, cache: Dict[str, str], cache_file: str):
+    def save_keyword_cache(self, cache: Dict[str, Dict[str, str]], cache_file: str):
         """
         Save keyword cache to JSON file
 
         Args:
-            cache: Dictionary mapping keywords to categories
+            cache: Hierarchical dictionary mapping transaction types to keyword-category mappings
             cache_file: Path to save cache file
         """
         with open(cache_file, 'w', encoding='utf-8') as f:
             json.dump(cache, f, indent=2, ensure_ascii=False)
-        print(
-            f"Updated cache with {len(cache)} keywords saved to {cache_file}")
 
-    def classify_transaction_with_cache(self, description: str, cache: Dict[str, str]) -> Optional[str]:
+        total_keywords = sum(len(type_cache) for type_cache in cache.values())
+        print(
+            f"Updated cache with {total_keywords} keywords saved to {cache_file}")
+
+    def classify_transaction_with_cache(self, description: str, transaction_type: str, cache: Dict[str, Dict[str, str]]) -> Optional[str]:
         """
-        Try to classify transaction using cached keywords
+        Try to classify transaction using cached keywords, considering transaction type
 
         Args:
             description: Transaction description
-            cache: Keyword to category mapping
+            transaction_type: Type of transaction (debits, credits, unknown)
+            cache: Hierarchical keyword cache with structure {transaction_type: {keyword: category}}
 
         Returns:
             Category if found in cache, None otherwise
@@ -92,49 +119,60 @@ class BankStatementWorkflow:
         # Convert description to uppercase for case-insensitive matching
         description_upper = description.upper()
 
-        # Check if any cached keyword is in the description
-        for cached_keyword, category in cache.items():
+        # Check transaction type specific cache first
+        type_cache = cache.get(transaction_type, {})
+        for cached_keyword, category in type_cache.items():
             # Skip empty keywords as they would match all descriptions
             if cached_keyword and cached_keyword in description_upper:
                 return category
 
+        # If not found in type-specific cache, check 'unknown' cache as fallback
+        if transaction_type != 'unknown':
+            unknown_cache = cache.get('unknown', {})
+            for cached_keyword, category in unknown_cache.items():
+                if cached_keyword and cached_keyword in description_upper:
+                    return category
+
         return None
 
-    def identify_uncached_transactions(self, transactions: List[Dict], cache: Dict[str, str]) -> List[str]:
+    def identify_uncached_transactions(self, transactions: List[Dict], cache: Dict[str, Dict[str, str]]) -> List[Dict]:
         """
         Identify transactions that need classification (not in cache)
 
         Args:
             transactions: List of transaction dictionaries
-            cache: Keyword to category mapping
+            cache: Hierarchical keyword cache with structure {transaction_type: {keyword: category}}
 
         Returns:
-            List of transaction descriptions needing classification
+            List of transaction dictionaries needing classification
         """
-        uncached_descriptions = []
+        uncached_transactions = []
 
         for transaction in transactions:
             description = transaction.get('description', '')
-            if description and not self.classify_transaction_with_cache(description, cache):
-                uncached_descriptions.append(description)
+            transaction_type = transaction.get('transaction_type', 'unknown')
+            if description and not self.classify_transaction_with_cache(description, transaction_type, cache):
+                uncached_transactions.append(transaction)
 
-        # Remove duplicates while preserving order
+        # Remove duplicates while preserving order (based on description + transaction_type)
         seen = set()
         unique_uncached = []
-        for desc in uncached_descriptions:
-            if desc not in seen:
-                seen.add(desc)
-                unique_uncached.append(desc)
+        for transaction in uncached_transactions:
+            key = (transaction.get('description', ''),
+                   transaction.get('transaction_type', 'unknown'))
+            if key not in seen:
+                seen.add(key)
+                unique_uncached.append(transaction)
 
         return unique_uncached
 
-    def apply_categories_to_transactions(self, transactions: List[Dict], cache: Dict[str, str]) -> List[Dict]:
+    def apply_categories_to_transactions(self, transactions: List[Dict], cache: Dict[str, Dict[str, str]]) -> List[Dict]:
         """
         Apply categories to all transactions using cache
 
         Args:
             transactions: List of transaction dictionaries
-            cache: Keyword to category mapping
+            cache: Hierarchical keyword cache with structure {transaction_type: {keyword: category}}
 
         Returns:
             List of transactions with category column added
@@ -144,9 +182,11 @@ class BankStatementWorkflow:
         for transaction in transactions:
             categorized_transaction = transaction.copy()
             description = transaction.get('description', '')
+            transaction_type = transaction.get('transaction_type', 'unknown')
 
             # Try to get category from cache
-            category = self.classify_transaction_with_cache(description, cache)
+            category = self.classify_transaction_with_cache(
+                description, transaction_type, cache)
             categorized_transaction['category'] = category if category else 'Uncategorized'
 
             categorized_transactions.append(categorized_transaction)
@@ -290,31 +330,31 @@ Return only the cleaned description, nothing else."""
         print(f"\n2. Loading keyword cache from {cache_file}...")
         if force_reclassify:
             print("   Force reclassify enabled - ignoring existing cache")
-            cache = {}
+            cache = {'unknown': {}, 'debits': {}, 'credits': {}}
         else:
             cache = self.load_keyword_cache(cache_file)
 
         # Step 3: Identify transactions needing classification
         print("\n3. Identifying transactions needing classification...")
         if force_reclassify:
-            unique_descriptions = list(
-                {t.get('description', '') for t in transactions if t.get('description', '')})
-            uncached_descriptions = unique_descriptions
+            # Create transaction dictionaries for all transactions when force reclassifying
+            uncached_transactions = [
+                t for t in transactions if t.get('description', '')]
         else:
-            uncached_descriptions = self.identify_uncached_transactions(
+            uncached_transactions = self.identify_uncached_transactions(
                 transactions, cache)
 
         print(
-            f"   Found {len(uncached_descriptions)} unique descriptions needing classification")
+            f"   Found {len(uncached_transactions)} unique transactions needing classification")
 
         # Step 4: Classify uncached transactions
         classification_results = pd.DataFrame()  # Initialize empty DataFrame
-        if uncached_descriptions:
+        if uncached_transactions:
             print(
-                f"\n4. Classifying {len(uncached_descriptions)} new transaction types...")
+                f"\n4. Classifying {len(uncached_transactions)} new transaction types...")
 
             classification_results = await self.classifier.classify_and_analyze(
-                transactions=uncached_descriptions,
+                transactions=uncached_transactions,
                 max_concurrent=max_concurrent,
                 return_only=True,
                 show_progress=True
@@ -325,8 +365,14 @@ Return only the cleaned description, nothing else."""
             for _, row in classification_results.iterrows():
                 keyword = row['keyword']
                 category = row['category']
-                if keyword and keyword not in cache:
-                    cache[keyword] = category
+                transaction_type = row.get('transaction_type', 'unknown')
+
+                # Ensure the transaction type exists in cache
+                if transaction_type not in cache:
+                    cache[transaction_type] = {}
+
+                if keyword and keyword not in cache[transaction_type]:
+                    cache[transaction_type][keyword] = category
                     new_keywords += 1
 
             print(f"   Added {new_keywords} new keywords to cache")
@@ -426,7 +472,15 @@ Return only the cleaned description, nothing else."""
         print("PROCESSING SUMMARY")
         print("="*60)
         print(f"Total transactions processed: {len(df)}")
-        print(f"Unique keywords in cache: {len(cache)}")
+
+        total_keywords = sum(len(type_cache) for type_cache in cache.values())
+        print(f"Unique keywords in cache: {total_keywords}")
+
+        # Show keyword breakdown by transaction type
+        for transaction_type, type_cache in cache.items():
+            if type_cache:
+                print(f"  {transaction_type}: {len(type_cache)} keywords")
+
         if clean_descriptions:
             print(f"Descriptions cleaned: {len(unique_descriptions)}")
 
