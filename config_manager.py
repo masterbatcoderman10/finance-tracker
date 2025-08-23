@@ -24,6 +24,7 @@ class ProcessingConfig:
     max_concurrent: int = 8
     model: str = "gpt-4.1-mini"
     report_filename: Optional[str] = None
+    openai_api_key: Optional[str] = None  # Allow API key from UI
     
     # Generated filenames (will be set by ConfigManager)
     output_csv: Optional[str] = None
@@ -71,12 +72,12 @@ class ConfigManager:
         elif not os.path.exists(config_dict['pdf_path']):
             errors.append(f"PDF file does not exist: {config_dict['pdf_path']}")
         
-        # Validate OpenAI API key
-        api_key = os.getenv('OPENAI_API_KEY')
+        # Validate OpenAI API key (from environment or UI input)
+        api_key = config_dict.get('openai_api_key') or os.getenv('OPENAI_API_KEY')
         if not api_key:
-            errors.append("OPENAI_API_KEY environment variable is required")
+            errors.append("OpenAI API key is required (either from environment variable or input field)")
         elif len(api_key.strip()) < 20:
-            errors.append("OPENAI_API_KEY appears to be invalid (too short)")
+            errors.append("OpenAI API key appears to be invalid (too short)")
         
         # Validate model selection
         model = config_dict.get('model', 'gpt-4.1-mini')
@@ -109,7 +110,8 @@ class ConfigManager:
                 save_classification_details=config_dict.get('save_classification_details', False),
                 max_concurrent=max_concurrent,
                 model=model,
-                report_filename=config_dict.get('report_filename')
+                report_filename=config_dict.get('report_filename'),
+                openai_api_key=config_dict.get('openai_api_key')
             )
             
             # Generate output file paths
@@ -226,12 +228,13 @@ class ConfigManager:
         """
         errors = []
         
-        # Check OpenAI API key
+        # Check OpenAI API key (but don't require it at environment level since UI can provide it)
         api_key = os.getenv('OPENAI_API_KEY')
         if not api_key:
-            errors.append("OPENAI_API_KEY environment variable is not set")
+            # This is not an error anymore - UI can provide the key
+            pass
         elif len(api_key.strip()) < 20:
-            errors.append("OPENAI_API_KEY appears to be invalid")
+            errors.append("OPENAI_API_KEY environment variable appears to be invalid")
         
         # Check required packages are importable
         required_packages = [
@@ -278,15 +281,21 @@ class ConfigManager:
 
 # Streamlit helper functions
 def display_environment_status():
-    """Display environment validation status in Streamlit"""
+    """Display environment validation status in Streamlit (excluding API key check)"""
     config_manager = ConfigManager()
     is_valid, errors = config_manager.validate_environment()
     
-    if is_valid:
-        st.success("✅ Environment is properly configured")
+    # Filter out API key errors since those are handled by UI input
+    filtered_errors = [error for error in errors if not error.startswith("OPENAI_API_KEY")]
+    
+    if len(filtered_errors) == 0:
+        if len(errors) == 0:
+            st.success("✅ Environment is properly configured")
+        else:
+            st.info("ℹ️ Environment packages are configured (API key handled separately)")
     else:
         st.error("❌ Environment configuration issues detected:")
-        for error in errors:
+        for error in filtered_errors:
             st.write(f"• {error}")
         
         with st.expander("🔧 Setup Instructions", expanded=True):
@@ -297,20 +306,9 @@ def display_environment_status():
             ```bash
             pip install -r requirements.txt
             ```
-            
-            2. **Set up OpenAI API Key:**
-            Create a `.env` file in your project directory:
-            ```
-            OPENAI_API_KEY=your_api_key_here
-            ```
-            
-            3. **Get an OpenAI API Key:**
-            - Visit [OpenAI API Keys](https://platform.openai.com/account/api-keys)
-            - Create a new API key
-            - Make sure your account has sufficient credits
             """)
     
-    return is_valid
+    return len(filtered_errors) == 0
 
 
 def create_config_from_ui(config_dict: Dict[str, Any]) -> Tuple[bool, ProcessingConfig]:

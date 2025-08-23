@@ -40,6 +40,8 @@ if 'error_message' not in st.session_state:
     st.session_state.error_message = None
 if 'results' not in st.session_state:
     st.session_state.results = None
+if 'openai_api_key' not in st.session_state:
+    st.session_state.openai_api_key = None
 
 def main():
     # Header Section
@@ -76,7 +78,55 @@ def main():
         - Updated transaction classification cache (for faster future processing)
         """)
     
-    # Environment validation
+    # Environment validation and API key input
+    api_key_from_env = os.getenv('OPENAI_API_KEY')
+    
+    if not api_key_from_env:
+        st.warning("⚠️ OpenAI API key not found in environment variables")
+        
+        # Show API key input field
+        st.subheader("🔑 OpenAI API Key Required")
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            api_key_input = st.text_input(
+                "Enter your OpenAI API Key",
+                type="password",
+                placeholder="sk-...",
+                help="Enter your OpenAI API key to enable transaction classification. This key will only be used for this session and will not be saved.",
+                value=st.session_state.openai_api_key or ""
+            )
+        with col2:
+            if st.button("💾 Use Key", help="Use this API key for the current session"):
+                if api_key_input and len(api_key_input.strip()) >= 20:
+                    st.session_state.openai_api_key = api_key_input.strip()
+                    st.success("✅ API key accepted")
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid API key format")
+        
+        # Show instructions for getting API key
+        with st.expander("🔧 How to get an OpenAI API Key", expanded=False):
+            st.markdown("""
+            **To get your OpenAI API key:**
+            
+            1. Visit [OpenAI API Keys](https://platform.openai.com/account/api-keys)
+            2. Sign in to your OpenAI account (or create one)
+            3. Click "Create new secret key"
+            4. Copy the key and paste it in the field above
+            5. Make sure your account has sufficient credits for API usage
+            
+            **Security Note:** Your API key will only be used during this session and will not be saved or cached.
+            """)
+        
+        # If no valid API key is provided, don't proceed
+        if not st.session_state.openai_api_key:
+            st.stop()
+    else:
+        # Show that environment key is being used
+        st.success("✅ Using OpenAI API key from environment variables")
+    
+    # Validate other environment requirements
     if not display_environment_status():
         st.stop()
     
@@ -227,7 +277,8 @@ def main():
                 'save_classification_details': save_classification_details,
                 'max_concurrent': max_concurrent,
                 'model': model_choice,
-                'report_filename': custom_report_name if custom_report_name else None
+                'report_filename': custom_report_name if custom_report_name else None,
+                'openai_api_key': st.session_state.openai_api_key  # Include API key from session
             }
             
             # Start processing (this will be implemented in the workflow adapter)
@@ -275,7 +326,7 @@ def process_bank_statement(config):
     """
     try:
         # Create configuration for validation
-        success, validated_config = create_config_from_ui(config)
+        success, _ = create_config_from_ui(config)
         if not success:
             st.session_state.processing_status = "error"
             st.session_state.error_message = "Configuration validation failed"
