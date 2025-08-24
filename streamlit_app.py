@@ -13,8 +13,7 @@ from dotenv import load_dotenv
 
 # Import our custom modules
 from file_utils import get_file_manager, display_file_validation_results, create_download_button
-from config_manager import display_environment_status, create_config_from_ui
-from streamlit_workflow import process_bank_statement_streamlit
+from config_manager import display_environment_status
 
 # Load environment variables
 load_dotenv()
@@ -43,11 +42,70 @@ if 'results' not in st.session_state:
 if 'openai_api_key' not in st.session_state:
     st.session_state.openai_api_key = None
 
+# Two-stage workflow session state
+if 'current_stage' not in st.session_state:
+    st.session_state.current_stage = 1  # 1: inputs, 2: classification review, 3: results
+if 'classification_results' not in st.session_state:
+    st.session_state.classification_results = None
+if 'edited_classifications' not in st.session_state:
+    st.session_state.edited_classifications = None
+if 'stage1_data' not in st.session_state:
+    st.session_state.stage1_data = None
+if 'stage1_config' not in st.session_state:
+    st.session_state.stage1_config = None
+if 'progress_data' not in st.session_state:
+    st.session_state.progress_data = {
+        'current_step': 0,
+        'progress_percentage': 0,
+        'current_message': "Initializing...",
+        'step_details': {},
+        'start_time': None,
+        'estimated_completion': None
+    }
+
 def main():
     # Header Section
     st.title("📊 Finance Tracker")
     st.subheader("Bank Statement Processing & Financial Analysis")
     
+    # Stage indicator
+    stage_names = ["📄 File Upload & Configuration", "🔍 Review Classifications", "📊 Results & Downloads"]
+    current_stage_name = stage_names[st.session_state.current_stage - 1]
+    st.info(f"**Current Stage:** {current_stage_name}")
+    
+    # Navigation breadcrumbs
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.session_state.current_stage == 1:
+            st.markdown("🔵 **Stage 1**")
+        else:
+            st.markdown("✅ Stage 1")
+    with col2:
+        if st.session_state.current_stage == 2:
+            st.markdown("🔵 **Stage 2**")
+        elif st.session_state.current_stage > 2:
+            st.markdown("✅ Stage 2")
+        else:
+            st.markdown("⚪ Stage 2")
+    with col3:
+        if st.session_state.current_stage == 3:
+            st.markdown("🔵 **Stage 3**")
+        else:
+            st.markdown("⚪ Stage 3")
+    
+    st.markdown("---")
+    
+    # Conditional rendering based on current stage
+    if st.session_state.current_stage == 1:
+        render_stage1()
+    elif st.session_state.current_stage == 2:
+        render_stage2()
+    elif st.session_state.current_stage == 3:
+        render_stage3()
+
+
+def render_stage1():
+    """Render Stage 1: File Upload & Configuration"""
     st.markdown("""
     **Transform your bank statement PDFs into organized financial insights**
     
@@ -67,9 +125,9 @@ def main():
         1. Upload your bank statement PDF
         2. Enter the PDF password if required
         3. Configure processing options (optional)
-        4. Click "Process Bank Statement" 
-        5. Monitor real-time progress
-        6. Download your financial reports
+        4. Click "Start Processing" to extract and classify transactions
+        5. Review and edit AI classifications
+        6. Generate final reports and download results
         
         **What you'll get:**
         - Categorized transactions CSV file
@@ -247,7 +305,7 @@ def main():
             )
     
     # Processing Section
-    st.subheader("🚀 Process Bank Statement")
+    st.subheader("🚀 Start Processing")
     
     # Process button
     can_process = (
@@ -256,7 +314,7 @@ def main():
     )
     
     if st.button(
-        "Process Bank Statement", 
+        "Start Processing →", 
         disabled=not can_process,
         use_container_width=True,
         type="primary"
@@ -281,24 +339,21 @@ def main():
                 'openai_api_key': st.session_state.openai_api_key  # Include API key from session
             }
             
-            # Start processing (this will be implemented in the workflow adapter)
-            process_bank_statement(config)
+            # Start stage 1 processing
+            process_stage1_only(config)
         else:
             st.error("Please upload a PDF file first.")
     
     # Processing Status Display
     if st.session_state.processing_status == "processing":
-        st.info("🔄 Processing your bank statement...")
+        st.info("🔄 Processing stage 1: PDF extraction and classification...")
         
         # Progress placeholder (will be populated by progress tracker)
         progress_container = st.container()
         with progress_container:
             st.progress(0, text="Initializing...")
-            st.empty()  # Placeholder for detailed progress
-    
-    elif st.session_state.processing_status == "complete":
-        st.success("✅ Processing completed successfully!")
-        display_results()
+            with st.spinner("Processing..."):
+                st.empty()  # Processing will happen and rerun will occur
     
     elif st.session_state.processing_status == "error":
         st.error(f"❌ Processing failed: {st.session_state.error_message}")
@@ -319,25 +374,294 @@ def main():
             st.session_state.processing_status = "idle"
             st.session_state.error_message = None
             st.rerun()
+    
+    # Show stage completion messages only for stage 1
+    elif st.session_state.current_stage == 1:
+        if (st.session_state.classification_results is not None and 
+            isinstance(st.session_state.classification_results, pd.DataFrame) and 
+            not st.session_state.classification_results.empty):
+            st.success("✅ Stage 1 completed! Continue to review classifications.")
+            
+            if st.button("Continue to Review Classifications →", type="primary", use_container_width=True):
+                st.session_state.current_stage = 2
+                st.rerun()
+        
+        elif (st.session_state.stage1_data is not None and 
+              st.session_state.classification_results is not None and
+              isinstance(st.session_state.classification_results, pd.DataFrame) and 
+              st.session_state.classification_results.empty):
+            st.success("✅ No new classifications needed! Continue to final processing.")
+            
+            if st.button("Continue to Final Processing →", type="primary", use_container_width=True):
+                st.session_state.current_stage = 3
+                st.rerun()
 
-def process_bank_statement(config):
+
+def render_stage2():
+    """Render Stage 2: Review and Edit Classifications"""
+    st.subheader("🔍 Review Classification Results")
+    
+    if (st.session_state.classification_results is None or 
+        (isinstance(st.session_state.classification_results, pd.DataFrame) and st.session_state.classification_results.empty)):
+        st.error("No classification results available. Please go back to Stage 1.")
+        if st.button("← Back to Stage 1"):
+            st.session_state.current_stage = 1
+            st.rerun()
+        return
+    
+    st.markdown("""
+    Review the AI-generated transaction classifications below. You can edit any category, keyword, or reasoning 
+    before proceeding to generate the final reports.
+    """)
+    
+    # Display summary info
+    if st.session_state.stage1_data:
+        progress_info = st.session_state.stage1_data.get('progress_info', {})
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Transactions Found", progress_info.get('transactions_found', 0))
+        with col2:
+            st.metric("Cached Keywords", progress_info.get('cached_keywords', 0))
+        with col3:
+            st.metric("Need Classification", progress_info.get('uncached_transactions', 0))
+        with col4:
+            st.metric("New Classifications", progress_info.get('new_classifications', 0))
+    
+    st.markdown("---")
+    
+    # Data editor for classification results
+    st.subheader("📝 Edit Classification Results")
+    
+    # Get available categories for dropdown
+    from transaction_analyzer import TransactionCategory
+    available_categories = [cat.value for cat in TransactionCategory]
+    
+    # Configure column types for the data editor
+    column_config = {
+        "category": st.column_config.SelectboxColumn(
+            "Category",
+            help="Select the transaction category",
+            options=available_categories,
+            required=True,
+        ),
+        "confidence": st.column_config.NumberColumn(
+            "Confidence",
+            help="Confidence score (0.0 to 1.0)",
+            min_value=0.0,
+            max_value=1.0,
+            step=0.1,
+        ),
+        "keyword": st.column_config.TextColumn(
+            "Keyword",
+            help="Key merchant identifier for caching",
+            max_chars=100,
+        ),
+        "reasoning": st.column_config.TextColumn(
+            "Reasoning",
+            help="Explanation for the classification",
+            max_chars=500,
+        )
+    }
+    
+    # Display the editable dataframe
+    edited_classifications = st.data_editor(
+        st.session_state.classification_results,
+        column_config=column_config,
+        use_container_width=True,
+        num_rows="dynamic",
+        key="classification_editor"
+    )
+    
+    # Validation
+    st.markdown("---")
+    
+    # Show changes
+    try:
+        has_changes = not edited_classifications.equals(st.session_state.classification_results)
+    except:
+        has_changes = True  # Assume changes if comparison fails
+    
+    if has_changes:
+        st.info("🔄 Classifications have been modified")
+        
+        # Count changes
+        changes = 0
+        try:
+            for idx in edited_classifications.index:
+                if idx in st.session_state.classification_results.index:
+                    if not edited_classifications.loc[idx].equals(st.session_state.classification_results.loc[idx]):
+                        changes += 1
+                else:
+                    changes += 1
+        except:
+            changes = len(edited_classifications)
+        
+        st.write(f"**Changes detected:** {changes} rows modified")
+    
+    # Navigation buttons
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("← Back to Stage 1", use_container_width=True):
+            st.session_state.current_stage = 1
+            st.rerun()
+    
+    with col2:
+        if st.button("Continue to Stage 3 →", type="primary", use_container_width=True):
+            # Validate classifications before proceeding
+            if edited_classifications.empty:
+                st.error("Cannot proceed with empty classifications")
+                return
+            
+            # Check for required columns
+            required_columns = ['category', 'keyword', 'confidence']
+            missing_columns = [col for col in required_columns if col not in edited_classifications.columns]
+            if missing_columns:
+                st.error(f"Missing required columns: {missing_columns}")
+                return
+            
+            # Save edited classifications and proceed
+            st.session_state.edited_classifications = edited_classifications
+            st.session_state.current_stage = 3
+            st.rerun()
+
+
+def render_stage3():
+    """Render Stage 3: Final Processing and Results"""
+    st.subheader("🚀 Final Processing & Results")
+    
+    # Check if we have the required data - edited_classifications can be empty if no new classifications were needed
+    if (st.session_state.edited_classifications is None or 
+        st.session_state.stage1_data is None):
+        st.error("Missing required data from previous stages.")
+        if st.button("← Back to Stage 2"):
+            st.session_state.current_stage = 2
+            st.rerun()
+        return
+    
+    # Check if final processing is complete
+    if st.session_state.results is None:
+        st.markdown("Ready to complete processing with your edited classifications.")
+        
+        if st.button("🚀 Complete Processing", type="primary", use_container_width=True):
+            # Start stage 2 processing
+            try:
+                st.session_state.processing_status = "processing"
+                st.info("🔄 Applying classifications and generating final reports...")
+                
+                # Import and use the workflow
+                from streamlit_workflow import StreamlitBankStatementWorkflow
+                from config_manager import get_config_manager
+                
+                # Get API key
+                api_key = st.session_state.stage1_config.get('openai_api_key') or os.getenv("OPENAI_API_KEY")
+                
+                # Validate config
+                config_manager = get_config_manager()
+                is_valid, errors, config = config_manager.validate_config(st.session_state.stage1_config)
+                
+                if not is_valid:
+                    st.error(f"Configuration validation failed: {'; '.join(errors)}")
+                    return
+                
+                # Create workflow and process stage 2
+                workflow = StreamlitBankStatementWorkflow(api_key, config.model)
+                
+                # Run stage 2 processing
+                import asyncio
+                results = asyncio.run(
+                    workflow.process_stage2_with_progress(
+                        config, 
+                        st.session_state.stage1_data,
+                        st.session_state.edited_classifications
+                    )
+                )
+                
+                st.session_state.results = results
+                st.session_state.processing_status = "complete"
+                st.rerun()
+                
+            except Exception as e:
+                st.session_state.processing_status = "error"
+                st.session_state.error_message = str(e)
+                st.error(f"Processing failed: {str(e)}")
+    else:
+        # Show results
+        st.success("✅ Processing completed successfully!")
+        display_results()
+        
+        # Navigation
+        if st.button("🔄 Start New Processing", use_container_width=True):
+            # Reset all session state for new processing
+            st.session_state.current_stage = 1
+            st.session_state.classification_results = None
+            st.session_state.edited_classifications = None
+            st.session_state.stage1_data = None
+            st.session_state.stage1_config = None
+            st.session_state.results = None
+            st.session_state.processing_status = "idle"
+            st.rerun()
+
+
+def process_stage1_only(config):
     """
-    Process the bank statement with the given configuration
+    Process stage 1: PDF extraction through classification
     """
     try:
-        # Create configuration for validation
-        success, _ = create_config_from_ui(config)
-        if not success:
+        # Store config for later use
+        st.session_state.stage1_config = config
+        
+        # Import and use the workflow
+        from streamlit_workflow import StreamlitBankStatementWorkflow
+        from config_manager import get_config_manager
+        
+        # Validate and create configuration
+        config_manager = get_config_manager()
+        is_valid, errors, validated_config = config_manager.validate_config(config)
+
+        if not is_valid:
             st.session_state.processing_status = "error"
-            st.session_state.error_message = "Configuration validation failed"
+            st.session_state.error_message = f"Configuration validation failed: {'; '.join(errors)}"
             return
         
-        # Process using the workflow adapter
-        results = process_bank_statement_streamlit(config)
+        # Get API key
+        api_key = config.get('openai_api_key') or os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            st.session_state.processing_status = "error"
+            st.session_state.error_message = "OPENAI_API_KEY not found"
+            return
+
+        # Create workflow instance
+        workflow = StreamlitBankStatementWorkflow(api_key, validated_config.model)
         
-        # Update session state with results
-        st.session_state.processing_status = "complete"
-        st.session_state.results = results
+        # Run stage 1 processing
+        import asyncio
+        stage1_data = asyncio.run(
+            workflow.process_stage1_with_progress(validated_config)
+        )
+        
+        # Store results in session state
+        st.session_state.stage1_data = stage1_data
+        st.session_state.classification_results = stage1_data['classification_results']
+        
+        # Debug output
+        print(f"Stage 1 completed. Classification results type: {type(stage1_data['classification_results'])}")
+        if isinstance(stage1_data['classification_results'], pd.DataFrame):
+            print(f"Classification results shape: {stage1_data['classification_results'].shape}")
+            print(f"Classification results empty: {stage1_data['classification_results'].empty}")
+        
+        # Move to stage 2 if we have classifications to review
+        classification_results = stage1_data['classification_results']
+        if (isinstance(classification_results, pd.DataFrame) and not classification_results.empty):
+            print("Moving to stage 2 - have classifications to review")
+            st.session_state.current_stage = 2
+        else:
+            print("Staying in stage 1 - no classifications to review, user will manually proceed")
+            # If no new classifications, prepare empty DataFrame but stay in stage 1 
+            # so user can see the "Continue to Final Processing" button
+            st.session_state.edited_classifications = pd.DataFrame()
+        
+        st.session_state.processing_status = "idle"  # Reset processing status
+        st.rerun()  # Trigger rerun to show the next stage
         
     except Exception as e:
         st.session_state.processing_status = "error"
