@@ -141,6 +141,56 @@ self.table_settings = {
 }
 ```
 
+## Docker Usage
+
+This application can be run using Docker for easy deployment and isolation.
+
+### Building the Docker Image
+
+```bash
+# Build the image
+docker build -t finance-tracker .
+```
+
+### Running with Docker
+
+#### Basic run:
+```bash
+# Run the container (access at http://localhost:8501)
+docker run -p 8501:8501 finance-tracker
+```
+
+#### With OpenAI API Key:
+```bash
+# Run with environment variable for OpenAI API key
+docker run -p 8501:8501 -e OPENAI_API_KEY=your_api_key_here finance-tracker
+```
+
+#### With persistent data volume:
+```bash
+# Mount a volume for persistent data storage
+docker run -p 8501:8501 -v $(pwd)/data:/app/data -e OPENAI_API_KEY=your_api_key_here finance-tracker
+```
+
+### Docker Environment Variables
+
+- `OPENAI_API_KEY`: Your OpenAI API key for transaction classification
+- `STREAMLIT_SERVER_PORT`: Port for Streamlit server (default: 8501)
+- `STREAMLIT_SERVER_ADDRESS`: Server address (default: 0.0.0.0)
+
+### Accessing the Application
+
+Once the Docker container is running, open your web browser and navigate to:
+```
+http://localhost:8501
+```
+
+The Streamlit web interface provides a user-friendly way to:
+1. Upload bank statement PDFs
+2. Configure processing options  
+3. Review and edit AI classifications
+4. Download processed results and reports
+
 ## License
 
 This project is open source and available under the MIT License. 
