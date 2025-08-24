@@ -348,12 +348,12 @@ def render_stage1():
     if st.session_state.processing_status == "processing":
         st.info("🔄 Processing stage 1: PDF extraction and classification...")
         
-        # Progress placeholder (will be populated by progress tracker)
-        progress_container = st.container()
-        with progress_container:
-            st.progress(0, text="Initializing...")
-            with st.spinner("Processing..."):
-                st.empty()  # Processing will happen and rerun will occur
+        # Show processing indicator
+        with st.spinner("Processing your bank statement..."):
+            st.write("📄 Extracting transactions from PDF")
+            st.write("🔍 Identifying transactions needing classification") 
+            st.write("🤖 Running AI classification on new transactions")
+            st.write("⏳ This may take a few moments depending on the number of transactions")
     
     elif st.session_state.processing_status == "error":
         st.error(f"❌ Processing failed: {st.session_state.error_message}")
